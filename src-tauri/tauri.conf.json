@@ -7,15 +7,7 @@
   },
   "app": {
     "withGlobalTauri": true,
-    "windows": [
-      {
-        "label": "main",
-        "title": "Voice Changer",
-        "width": 400,
-        "height": 500,
-        "resizable": false
-      }
-    ],
+    "windows": [],
     "trayIcon": {
       "iconPath": "icons/icon.png",
       "iconAsTemplate": true

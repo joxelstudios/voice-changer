@@ -1,0 +1,22 @@
+body { display: flex; flex-direction: column; justify-content: center; min-height: 100vh; padding: 24px; }
+h1 { text-align: center; margin-bottom: 24px; }
+.step { margin-bottom: 16px; padding: 12px; background: #252540; border-radius: 8px; border: 1px solid #333; }
+.step-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.step-title { font-size: 14px; font-weight: 600; }
+.step-status { font-size: 12px; }
+.step-status.done { color: #00c8b4; }
+.step-status.downloading { color: #f0c040; }
+.step-status.error { color: #e04040; }
+.step-status.waiting { color: #666; }
+.progress-bar { height: 6px; background: #1a1a2e; border-radius: 3px; overflow: hidden; }
+.progress-fill { height: 100%; background: #00c8b4; width: 0%; transition: width 0.2s; }
+.vb-cable-msg { font-size: 12px; color: #888; margin-top: 6px; line-height: 1.5; }
+.vb-cable-msg a { color: #00c8b4; text-decoration: none; cursor: pointer; }
+.vb-cable-msg a:hover { text-decoration: underline; }
+.btn-launch {
+  width: 100%; padding: 14px; font-size: 16px; font-weight: 700;
+  background: #00c8b4; color: #1a1a2e; border: none; border-radius: 8px;
+  cursor: pointer; margin-top: 16px; display: none;
+}
+.btn-launch:hover { background: #00e6cf; }
+.btn-launch.visible { display: block; }

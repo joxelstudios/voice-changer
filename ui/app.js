@@ -5,10 +5,11 @@ let engineRunning = false;
 
 async function init() {
   try {
-    const [inputs, outputs, virtualOut] = await Promise.all([
+    const [inputs, outputs, virtualOut, savedConfig] = await Promise.all([
       invoke('get_input_devices'),
       invoke('get_output_devices'),
       invoke('get_virtual_output'),
+      invoke('get_saved_config'),
     ]);
 
     const inputSelect = document.getElementById('input-device');
@@ -18,6 +19,8 @@ async function init() {
       const opt = document.createElement('option');
       opt.value = name;
       opt.textContent = name;
+      // Restore saved input device
+      if (savedConfig.input_device && name === savedConfig.input_device) opt.selected = true;
       inputSelect.appendChild(opt);
     });
 
@@ -25,7 +28,12 @@ async function init() {
       const opt = document.createElement('option');
       opt.value = name;
       opt.textContent = name;
-      if (virtualOut && name === virtualOut) opt.selected = true;
+      // Restore saved output device, fallback to virtual output auto-detect
+      if (savedConfig.output_device && name === savedConfig.output_device) {
+        opt.selected = true;
+      } else if (!savedConfig.output_device && virtualOut && name === virtualOut) {
+        opt.selected = true;
+      }
       outputSelect.appendChild(opt);
     });
   } catch (e) {

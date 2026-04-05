@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Voice Changer — Setup</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="setup-style.css">
+</head>
+<body>
+  <h1>Voice Changer Setup</h1>
+
+  <div class="step" id="step-contentvec">
+    <div class="step-header">
+      <span class="step-title">ContentVec Model (~293MB)</span>
+      <span class="step-status waiting" id="status-contentvec">Waiting...</span>
+    </div>
+    <div class="progress-bar"><div class="progress-fill" id="progress-contentvec"></div></div>
+  </div>
+
+  <div class="step" id="step-demo">
+    <div class="step-header">
+      <span class="step-title">Demo Voice Model (~55MB)</span>
+      <span class="step-status waiting" id="status-demo">Waiting...</span>
+    </div>
+    <div class="progress-bar"><div class="progress-fill" id="progress-demo"></div></div>
+  </div>
+
+  <div class="step" id="step-vbcable">
+    <div class="step-header">
+      <span class="step-title">Virtual Audio Cable</span>
+      <span class="step-status waiting" id="status-vbcable">Checking...</span>
+    </div>
+    <div class="vb-cable-msg" id="vbcable-msg"></div>
+  </div>
+
+  <button class="btn-launch" id="launch-btn">Launch Voice Changer</button>
+
+  <script src="setup.js"></script>
+</body>
+</html>

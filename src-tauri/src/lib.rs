@@ -1,3 +1,8 @@
+mod config;
+mod downloader;
+mod setup;
+
+use std::path::PathBuf;
 use std::sync::Mutex;
 
 use tauri::{
@@ -10,13 +15,24 @@ use audio_engine::{AudioEngine, EngineConfig, EngineState, list_input_devices, l
 use dsp::{Echo, Effect, PitchShift, Reverb, RobotVoice};
 use voice_conv::{VoiceConverter, VoiceConverterConfig, PresetManager, VoicePreset};
 
-struct AppState {
+use config::AppConfig;
+
+pub struct AppState {
     engine: Mutex<Option<EngineState>>,
     voice_converter: Mutex<Option<VoiceConverter>>,
     preset_manager: Mutex<PresetManager>,
+    config: Mutex<AppConfig>,
     sample_rate: u32,
-    models_dir: String,
-    presets_dir: String,
+    data_dir: PathBuf,
+}
+
+/// Resolve the portable data directory relative to the exe location.
+fn resolve_data_dir() -> PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
+        .join("data")
 }
 
 fn lock_engine(state: &AppState) -> Result<std::sync::MutexGuard<'_, Option<EngineState>>, String> {
@@ -34,6 +50,8 @@ fn build_effect(effect_type: &str, sample_rate: f32) -> Result<Box<dyn Effect>, 
     }
 }
 
+// --- Device Commands ---
+
 #[tauri::command]
 fn get_input_devices() -> Result<Vec<String>, String> {
     list_input_devices()
@@ -49,20 +67,34 @@ fn get_output_devices() -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
+fn get_virtual_output() -> Option<String> {
+    virtual_mic::find_virtual_output()
+}
+
+// --- Engine Commands ---
+
+#[tauri::command]
 fn start_engine(
     input_device: String,
     output_device: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
     let config = EngineConfig {
-        input_device,
-        output_device,
+        input_device: input_device.clone(),
+        output_device: output_device.clone(),
         sample_rate: state.sample_rate,
         buffer_size: 512,
     };
 
     let engine_state = AudioEngine::start(config).map_err(|e| e.to_string())?;
     *lock_engine(&state)? = Some(engine_state);
+
+    // Save device selection to config
+    if let Ok(mut cfg) = state.config.lock() {
+        cfg.input_device = Some(input_device);
+        cfg.output_device = Some(output_device);
+        let _ = cfg.save(&state.data_dir.join("config.json"));
+    }
     Ok(())
 }
 
@@ -81,12 +113,12 @@ fn set_bypass(enabled: bool, state: tauri::State<'_, AppState>) -> Result<(), St
     Ok(())
 }
 
+// --- DSP Effect Commands ---
+
 #[tauri::command]
 fn add_effect(effect_type: String, state: tauri::State<'_, AppState>) -> Result<usize, String> {
     let sr = state.sample_rate as f32;
     let effect = build_effect(&effect_type, sr)?;
-
-    // Clone the Arc, then drop the engine lock before locking the chain
     let chain = {
         let guard = lock_engine(&state)?;
         let engine = guard.as_ref().ok_or("Engine not running")?;
@@ -123,14 +155,11 @@ fn clear_effects(state: tauri::State<'_, AppState>) -> Result<(), String> {
 #[tauri::command]
 fn set_effects(effect_types: Vec<String>, state: tauri::State<'_, AppState>) -> Result<(), String> {
     let sr = state.sample_rate as f32;
-
-    // Build all effects before acquiring any locks
     let effects: Result<Vec<Box<dyn Effect>>, String> = effect_types
         .iter()
         .map(|t| build_effect(t, sr))
         .collect();
     let effects = effects?;
-
     let chain = {
         let guard = lock_engine(&state)?;
         let engine = guard.as_ref().ok_or("Engine not running")?;
@@ -149,19 +178,10 @@ fn get_effects(state: tauri::State<'_, AppState>) -> Result<Vec<(String, bool)>,
         engine.effect_chain().clone()
     };
     let chain = chain.lock().map_err(|e| e.to_string())?;
-    Ok(chain
-        .effect_names()
-        .into_iter()
-        .map(|(name, enabled)| (name.to_string(), enabled))
-        .collect())
+    Ok(chain.effect_names().into_iter().map(|(n, e)| (n.to_string(), e)).collect())
 }
 
-#[tauri::command]
-fn get_virtual_output() -> Option<String> {
-    virtual_mic::find_virtual_output()
-}
-
-// --- AI Voice Conversion Commands ---
+// --- AI Voice Commands ---
 
 #[tauri::command]
 fn list_presets(state: tauri::State<'_, AppState>) -> Result<Vec<VoicePreset>, String> {
@@ -176,9 +196,9 @@ fn load_voice(preset_name: String, state: tauri::State<'_, AppState>) -> Result<
         .ok_or_else(|| format!("Preset not found: {preset_name}"))?
         .clone();
 
-    let content_model = format!("{}/contentvec.onnx", state.models_dir);
+    let content_model = state.data_dir.join("models").join("contentvec.onnx");
     let config = VoiceConverterConfig {
-        content_model_path: content_model,
+        content_model_path: content_model.to_string_lossy().to_string(),
         generator_model_path: preset.model_path.clone(),
         sample_rate: state.sample_rate,
         pitch_shift: preset.pitch_shift,
@@ -186,14 +206,18 @@ fn load_voice(preset_name: String, state: tauri::State<'_, AppState>) -> Result<
 
     let converter = VoiceConverter::new(config).map_err(|e| e.to_string())?;
     *state.voice_converter.lock().map_err(|e| e.to_string())? = Some(converter);
-    log::info!("Voice loaded: {preset_name}");
+
+    // Save last preset to config
+    if let Ok(mut cfg) = state.config.lock() {
+        cfg.last_preset = Some(preset_name);
+        let _ = cfg.save(&state.data_dir.join("config.json"));
+    }
     Ok(())
 }
 
 #[tauri::command]
 fn unload_voice(state: tauri::State<'_, AppState>) -> Result<(), String> {
     *state.voice_converter.lock().map_err(|e| e.to_string())? = None;
-    log::info!("Voice unloaded");
     Ok(())
 }
 
@@ -214,46 +238,111 @@ fn is_voice_loaded(state: tauri::State<'_, AppState>) -> Result<bool, String> {
 
 #[tauri::command]
 fn save_preset(name: String, model_path: String, pitch_shift: f32, state: tauri::State<'_, AppState>) -> Result<(), String> {
-    let preset = VoicePreset {
-        name,
-        model_path,
-        pitch_shift,
-    };
+    let preset = VoicePreset { name, model_path, pitch_shift };
     let mut manager = state.preset_manager.lock().map_err(|e| e.to_string())?;
     manager.save_preset(&preset).map_err(|e| e.to_string())
 }
+
+// --- Setup Commands ---
+
+#[tauri::command]
+fn open_url(url: String) -> Result<(), String> {
+    open::that(&url).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn check_setup(state: tauri::State<'_, AppState>) -> Result<setup::SetupStatus, String> {
+    Ok(setup::check_setup(&state.data_dir))
+}
+
+#[tauri::command]
+fn download_model(app: tauri::AppHandle, name: String, url: String, state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let dest = state.data_dir.join("models").join(&name);
+    std::fs::create_dir_all(dest.parent().unwrap()).map_err(|e| e.to_string())?;
+
+    let app_clone = app.clone();
+    let name_clone = name.clone();
+    std::thread::spawn(move || {
+        match downloader::download_with_progress(&url, &dest, move |progress| {
+            let _ = app_clone.emit("download-progress", serde_json::json!({
+                "name": name_clone,
+                "progress": progress,
+            }));
+        }) {
+            Ok(_) => {
+                let _ = app.emit("download-complete", &name);
+            }
+            Err(e) => {
+                let _ = app.emit("download-error", serde_json::json!({
+                    "name": name,
+                    "error": e.to_string(),
+                }));
+            }
+        }
+    });
+    Ok(())
+}
+
+#[tauri::command]
+fn create_default_preset(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let models_dir = state.data_dir.join("models");
+    let demo_model = models_dir.join("demo-voice.onnx");
+
+    if demo_model.exists() {
+        let preset = VoicePreset {
+            name: "Demo Voice".to_string(),
+            model_path: demo_model.to_string_lossy().to_string(),
+            pitch_shift: 0.0,
+        };
+        let mut manager = state.preset_manager.lock().map_err(|e| e.to_string())?;
+        manager.save_preset(&preset).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn get_saved_config(state: tauri::State<'_, AppState>) -> Result<AppConfig, String> {
+    let cfg = state.config.lock().map_err(|e| e.to_string())?;
+    Ok(cfg.clone())
+}
+
+// --- App Entry ---
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     env_logger::init();
 
-    let models_dir = std::env::current_dir()
-        .unwrap_or_default()
-        .join("models")
-        .to_string_lossy()
-        .to_string();
-    let presets_dir = std::env::current_dir()
-        .unwrap_or_default()
-        .join("presets")
-        .to_string_lossy()
-        .to_string();
+    let data_dir = resolve_data_dir();
+    log::info!("Data directory: {}", data_dir.display());
 
-    let preset_manager = PresetManager::new(std::path::Path::new(&presets_dir))
+    // Ensure directories exist
+    let _ = std::fs::create_dir_all(data_dir.join("models"));
+    let _ = std::fs::create_dir_all(data_dir.join("presets"));
+
+    // Load config
+    let app_config = AppConfig::load(&data_dir.join("config.json"));
+
+    // Load presets
+    let preset_manager = PresetManager::new(&data_dir.join("presets"))
         .unwrap_or_else(|e| {
             log::warn!("Failed to load presets: {e}");
-            PresetManager::new(std::path::Path::new("/tmp/voice-changer-presets")).unwrap()
+            PresetManager::new(std::path::Path::new(&data_dir.join("presets"))).unwrap()
         });
+
+    // Check if setup is needed — determines which page to show
+    let needs_setup = !setup::check_setup(&data_dir).ready;
 
     tauri::Builder::default()
         .manage(AppState {
             engine: Mutex::new(None),
             voice_converter: Mutex::new(None),
             preset_manager: Mutex::new(preset_manager),
+            config: Mutex::new(app_config),
             sample_rate: 48000,
-            models_dir,
-            presets_dir,
+            data_dir,
         })
-        .setup(|app| {
+        .setup(move |app| {
+            // Tray
             let toggle = MenuItemBuilder::with_id("toggle", "Toggle Voice Changer").build(app)?;
             let quit = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
             let menu = MenuBuilder::new(app)
@@ -283,9 +372,7 @@ pub fn run() {
                                 let _ = app.emit("bypass-changed", bypass);
                             }
                         }
-                        "quit" => {
-                            app.exit(0);
-                        }
+                        "quit" => app.exit(0),
                         _ => {}
                     }
                 })
@@ -303,11 +390,35 @@ pub fn run() {
                 })
                 .build(app)?;
 
+            // Show setup wizard or main app based on setup status
+            if needs_setup {
+                let _window = tauri::WebviewWindowBuilder::new(
+                    app,
+                    "main",
+                    tauri::WebviewUrl::App("setup.html".into()),
+                )
+                .title("Voice Changer — Setup")
+                .inner_size(450.0, 400.0)
+                .resizable(false)
+                .build()?;
+            } else {
+                let _window = tauri::WebviewWindowBuilder::new(
+                    app,
+                    "main",
+                    tauri::WebviewUrl::App("index.html".into()),
+                )
+                .title("Voice Changer")
+                .inner_size(400.0, 500.0)
+                .resizable(false)
+                .build()?;
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             get_input_devices,
             get_output_devices,
+            get_virtual_output,
             start_engine,
             stop_engine,
             set_bypass,
@@ -316,13 +427,17 @@ pub fn run() {
             clear_effects,
             set_effects,
             get_effects,
-            get_virtual_output,
             list_presets,
             load_voice,
             unload_voice,
             set_ai_pitch,
             is_voice_loaded,
             save_preset,
+            check_setup,
+            download_model,
+            create_default_preset,
+            get_saved_config,
+            open_url,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
