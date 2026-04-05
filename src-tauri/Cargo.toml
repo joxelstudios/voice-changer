@@ -1,0 +1,22 @@
+[package]
+name = "voice-changer-app"
+version.workspace = true
+edition.workspace = true
+
+[build-dependencies]
+tauri-build.workspace = true
+
+[dependencies]
+tauri = { workspace = true, features = ["tray-icon"] }
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+log.workspace = true
+env_logger.workspace = true
+audio-engine = { path = "../crates/audio-engine" }
+dsp = { path = "../crates/dsp" }
+virtual-mic = { path = "../crates/virtual-mic" }
+
+[lib]
+name = "voice_changer_app"
+crate-type = ["lib", "cdylib", "staticlib"]

@@ -36,6 +36,13 @@ pub struct EngineState {
     _output_stream: cpal::Stream,
 }
 
+// cpal::Stream contains platform-specific types that aren't Send/Sync on macOS
+// (CoreAudio callback wrappers). The streams are created on one thread and only
+// held alive by EngineState — they're never accessed across threads directly.
+// The bypass and effect_chain fields use proper atomic/mutex synchronization.
+unsafe impl Send for EngineState {}
+unsafe impl Sync for EngineState {}
+
 pub struct AudioEngine;
 
 impl AudioEngine {
