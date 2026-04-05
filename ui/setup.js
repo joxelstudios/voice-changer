@@ -1,6 +1,5 @@
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
-const { getCurrentWebviewWindow } = window.__TAURI__.webviewWindow;
 
 let downloadsDone = { contentvec: false, demo: false };
 
@@ -95,11 +94,7 @@ async function checkAllDone() {
 
     const btn = document.getElementById('launch-btn');
     btn.classList.add('visible');
-    btn.addEventListener('click', async () => {
-      // Navigate to main app
-      const window = getCurrentWebviewWindow();
-      window.setTitle('Voice Changer');
-      // Use Tauri's navigate or just set location
+    btn.addEventListener('click', () => {
       document.location.href = 'index.html';
     });
   }

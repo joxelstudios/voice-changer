@@ -38,6 +38,7 @@ async function init() {
     });
   } catch (e) {
     console.error('Init failed:', e);
+    document.getElementById('status').textContent = 'Init error: ' + e;
   }
 
   // Listen for bypass changes from tray toggle
@@ -107,6 +108,13 @@ async function toggleEngine() {
   } else {
     const input = document.getElementById('input-device').value;
     const output = document.getElementById('output-device').value;
+
+    if (!input || !output) {
+      status.textContent = 'Error: select devices first';
+      status.classList.remove('on');
+      return;
+    }
+
     try {
       await invoke('start_engine', { inputDevice: input, outputDevice: output });
       engineRunning = true;
@@ -115,6 +123,8 @@ async function toggleEngine() {
       status.textContent = 'Running';
       status.classList.add('on');
     } catch (e) {
+      status.textContent = 'Error: ' + e;
+      status.classList.remove('on');
       console.error('Failed to start:', e);
     }
   }
