@@ -16,6 +16,7 @@ env_logger.workspace = true
 audio-engine = { path = "../crates/audio-engine" }
 dsp = { path = "../crates/dsp" }
 virtual-mic = { path = "../crates/virtual-mic" }
+voice-conv = { path = "../crates/voice-conv" }
 
 [lib]
 name = "voice_changer_app"

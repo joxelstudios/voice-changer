@@ -18,8 +18,12 @@
 
   <button class="btn-start" id="start-btn">Start</button>
 
-  <div class="section">
-    <h2>DSP Effects</h2>
+  <div class="tabs">
+    <button class="tab active" data-tab="dsp">DSP</button>
+    <button class="tab" data-tab="ai">AI Voice</button>
+  </div>
+
+  <div class="tab-content" id="tab-dsp">
     <div class="effects-grid">
       <button class="effect-btn" data-effect="pitch_up">Pitch Up<br><small>+5 semi</small></button>
       <button class="effect-btn" data-effect="pitch_down">Pitch Down<br><small>-5 semi</small></button>
@@ -29,6 +33,32 @@
       <button class="effect-btn" id="clear-btn">Clear All</button>
     </div>
     <div class="active-effects" id="active-effects"></div>
+  </div>
+
+  <div class="tab-content hidden" id="tab-ai">
+    <div class="ai-section">
+      <h2>Voice Presets</h2>
+      <div id="preset-list" class="preset-list">
+        <div class="preset-empty">No presets found. Place RVC ONNX models in the presets/ directory.</div>
+      </div>
+      <div class="ai-status" id="ai-status">No voice loaded</div>
+      <button class="btn-unload" id="unload-btn">Unload Voice</button>
+    </div>
+    <div class="ai-section">
+      <h2>Pitch Shift</h2>
+      <div class="pitch-control">
+        <input type="range" id="ai-pitch" min="-12" max="12" value="0" step="1">
+        <span id="ai-pitch-value">0 st</span>
+      </div>
+    </div>
+    <div class="ai-section">
+      <h2>Setup</h2>
+      <p class="setup-info">
+        Place ONNX models in the <code>models/</code> directory:<br>
+        - <code>contentvec.onnx</code> (ContentVec feature extractor)<br>
+        Place voice .json presets in <code>presets/</code>
+      </p>
+    </div>
   </div>
 
   <div class="status-bar">

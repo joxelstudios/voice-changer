@@ -5,3 +5,10 @@ edition.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+log.workspace = true
+ort.workspace = true
+ndarray.workspace = true
+rubato.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+hound.workspace = true

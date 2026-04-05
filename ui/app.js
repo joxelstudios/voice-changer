@@ -32,7 +32,7 @@ async function init() {
     console.error('Init failed:', e);
   }
 
-  // Listen for bypass changes from tray toggle (#5)
+  // Listen for bypass changes from tray toggle
   listen('bypass-changed', (event) => {
     const status = document.getElementById('status');
     if (event.payload) {
@@ -50,7 +50,34 @@ async function init() {
     btn.addEventListener('click', () => toggleEffect(btn));
   });
   document.getElementById('clear-btn').addEventListener('click', clearEffects);
+
+  // Tabs
+  document.querySelectorAll('.tab').forEach(tab => {
+    tab.addEventListener('click', () => switchTab(tab.dataset.tab));
+  });
+
+  // AI controls
+  document.getElementById('unload-btn').addEventListener('click', unloadVoice);
+  document.getElementById('ai-pitch').addEventListener('input', (e) => {
+    const val = parseInt(e.target.value);
+    document.getElementById('ai-pitch-value').textContent = `${val >= 0 ? '+' : ''}${val} st`;
+    invoke('set_ai_pitch', { semitones: val }).catch(console.error);
+  });
+
+  // Load presets
+  await loadPresets();
 }
+
+// --- Tabs ---
+
+function switchTab(tabName) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(c => c.classList.add('hidden'));
+  document.querySelector(`.tab[data-tab="${tabName}"]`).classList.add('active');
+  document.getElementById(`tab-${tabName}`).classList.remove('hidden');
+}
+
+// --- Engine ---
 
 async function toggleEngine() {
   const btn = document.getElementById('start-btn');
@@ -67,7 +94,6 @@ async function toggleEngine() {
     btn.classList.remove('active');
     status.textContent = 'Stopped';
     status.classList.remove('on');
-    // Clear effect UI state on stop (#6)
     document.querySelectorAll('.effect-btn.on').forEach(b => b.classList.remove('on'));
     document.getElementById('active-effects').innerHTML = '';
   } else {
@@ -86,6 +112,8 @@ async function toggleEngine() {
   }
 }
 
+// --- DSP Effects ---
+
 async function toggleEffect(el) {
   if (!engineRunning) return;
   const effect = el.dataset.effect;
@@ -96,7 +124,6 @@ async function toggleEffect(el) {
   await updateActiveEffects();
 }
 
-// Atomic rebuild: send the full desired effect list in one call (#10)
 async function rebuildEffects() {
   const activeEffects = [];
   document.querySelectorAll('.effect-btn.on').forEach(btn => {
@@ -122,7 +149,6 @@ async function clearEffects() {
   await updateActiveEffects();
 }
 
-// Safe DOM creation instead of innerHTML with template literals (#7)
 async function updateActiveEffects() {
   try {
     const effects = await invoke('get_effects');
@@ -136,6 +162,73 @@ async function updateActiveEffects() {
   } catch (e) {
     // Engine might not be running
   }
+}
+
+// --- AI Voice ---
+
+async function loadPresets() {
+  try {
+    const presets = await invoke('list_presets');
+    const container = document.getElementById('preset-list');
+    container.innerHTML = '';
+
+    if (presets.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'preset-empty';
+      empty.textContent = 'No presets found. Place RVC ONNX models in presets/ with .json configs.';
+      container.appendChild(empty);
+      return;
+    }
+
+    presets.forEach(preset => {
+      const item = document.createElement('div');
+      item.className = 'preset-item';
+      item.addEventListener('click', () => selectPreset(preset.name, item));
+
+      const name = document.createElement('span');
+      name.textContent = preset.name;
+
+      const pitch = document.createElement('small');
+      pitch.textContent = preset.pitch_shift !== 0
+        ? `${preset.pitch_shift >= 0 ? '+' : ''}${preset.pitch_shift} st`
+        : '';
+
+      item.appendChild(name);
+      item.appendChild(pitch);
+      container.appendChild(item);
+    });
+  } catch (e) {
+    console.error('Failed to load presets:', e);
+  }
+}
+
+async function selectPreset(name, element) {
+  const aiStatus = document.getElementById('ai-status');
+  aiStatus.textContent = 'Loading...';
+  aiStatus.classList.remove('loaded');
+
+  document.querySelectorAll('.preset-item.active').forEach(i => i.classList.remove('active'));
+
+  try {
+    await invoke('load_voice', { presetName: name });
+    element.classList.add('active');
+    aiStatus.textContent = `Loaded: ${name}`;
+    aiStatus.classList.add('loaded');
+  } catch (e) {
+    aiStatus.textContent = `Failed: ${e}`;
+    console.error('Failed to load voice:', e);
+  }
+}
+
+async function unloadVoice() {
+  try {
+    await invoke('unload_voice');
+  } catch (e) {
+    console.error('Failed to unload voice:', e);
+  }
+  document.querySelectorAll('.preset-item.active').forEach(i => i.classList.remove('active'));
+  document.getElementById('ai-status').textContent = 'No voice loaded';
+  document.getElementById('ai-status').classList.remove('loaded');
 }
 
 init();

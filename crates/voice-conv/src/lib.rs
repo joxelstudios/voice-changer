@@ -1,2 +1,9 @@
-// Voice conversion crate — Phase 3
-// Will contain ONNX inference, speaker embedding, model management
+mod f0;
+mod content;
+mod generator;
+mod pipeline;
+mod preset;
+mod resample;
+
+pub use pipeline::{VoiceConverter, VoiceConverterConfig};
+pub use preset::{VoicePreset, PresetManager};
