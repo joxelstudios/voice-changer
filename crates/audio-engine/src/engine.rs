@@ -1,9 +1,10 @@
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::StreamConfig;
+use dsp::EffectChain;
 use ringbuf::traits::{Consumer, Producer};
 
 use crate::device::find_device_by_name;
@@ -30,6 +31,7 @@ impl Default for EngineConfig {
 
 pub struct EngineState {
     bypass: Arc<AtomicBool>,
+    effect_chain: Arc<Mutex<EffectChain>>,
     _input_stream: cpal::Stream,
     _output_stream: cpal::Stream,
 }
@@ -37,11 +39,10 @@ pub struct EngineState {
 pub struct AudioEngine;
 
 impl AudioEngine {
-    /// Start the audio passthrough pipeline.
+    /// Start the audio pipeline with DSP effects.
     ///
     /// Captures from `input_device`, pipes through a ring buffer,
-    /// and plays back on `output_device`. When bypass is enabled,
-    /// the output receives the input unchanged.
+    /// applies the effect chain, and outputs to `output_device`.
     pub fn start(config: EngineConfig) -> Result<EngineState> {
         let input_dev = find_device_by_name(&config.input_device, true)
             .context("Input device lookup failed")?;
@@ -54,18 +55,18 @@ impl AudioEngine {
             buffer_size: cpal::BufferSize::Fixed(config.buffer_size),
         };
 
-        // Ring buffer: ~200ms worth of audio at the configured sample rate
+        // Ring buffer: ~200ms worth of audio
         let capacity = (config.sample_rate as usize) / 5;
         let rb = AudioRingBuffer::new(capacity);
         let (mut producer, mut consumer) = rb.split();
 
         let bypass = Arc::new(AtomicBool::new(false));
+        let effect_chain = Arc::new(Mutex::new(EffectChain::new()));
 
         let input_stream = input_dev
             .build_input_stream(
                 &stream_config,
                 move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                    // Push captured samples into ring buffer
                     let written = producer.push_slice(data);
                     if written < data.len() {
                         log::warn!(
@@ -82,12 +83,12 @@ impl AudioEngine {
             .context("Failed to build input stream")?;
 
         let bypass_clone = bypass.clone();
+        let chain_clone = effect_chain.clone();
         let output_stream = output_dev
             .build_output_stream(
                 &stream_config,
                 move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
                     if bypass_clone.load(Ordering::Relaxed) {
-                        // Bypass: silence output
                         for sample in data.iter_mut() {
                             *sample = 0.0;
                         }
@@ -96,12 +97,13 @@ impl AudioEngine {
 
                     // Pull from ring buffer
                     let read = consumer.pop_slice(data);
-                    // Fill remainder with silence if buffer underrun
                     for sample in &mut data[read..] {
                         *sample = 0.0;
                     }
-                    if read < data.len() {
-                        log::trace!("Ring buffer underrun: {read}/{}", data.len());
+
+                    // Apply effect chain (try_lock to never block the audio thread)
+                    if let Ok(mut chain) = chain_clone.try_lock() {
+                        chain.process(&mut data[..read]);
                     }
                 },
                 |err| {
@@ -124,6 +126,7 @@ impl AudioEngine {
 
         Ok(EngineState {
             bypass,
+            effect_chain,
             _input_stream: input_stream,
             _output_stream: output_stream,
         })
@@ -138,5 +141,11 @@ impl EngineState {
 
     pub fn is_bypassed(&self) -> bool {
         self.bypass.load(Ordering::Relaxed)
+    }
+
+    /// Access the effect chain for adding/removing/toggling effects.
+    /// This locks the mutex — do NOT call from the audio thread.
+    pub fn effect_chain(&self) -> &Arc<Mutex<EffectChain>> {
+        &self.effect_chain
     }
 }
