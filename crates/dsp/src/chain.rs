@@ -43,6 +43,18 @@ impl EffectChain {
         self.effects.clear();
     }
 
+    /// Atomically replace the entire effect chain. Avoids the audio glitch
+    /// caused by clearing then re-adding effects one-by-one.
+    pub fn replace_all(&mut self, effects: Vec<Box<dyn Effect>>) {
+        self.effects.clear();
+        for effect in effects {
+            self.effects.push(EffectSlot {
+                effect,
+                enabled: true,
+            });
+        }
+    }
+
     pub fn process(&mut self, buffer: &mut [f32]) {
         for slot in &mut self.effects {
             if slot.enabled {

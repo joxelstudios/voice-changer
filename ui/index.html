@@ -4,97 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Voice Changer</title>
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      background: #1a1a2e;
-      color: #e0e0e0;
-      padding: 16px;
-      user-select: none;
-    }
-    h1 { font-size: 18px; margin-bottom: 12px; color: #00c8b4; }
-    h2 { font-size: 13px; margin-bottom: 8px; color: #888; text-transform: uppercase; letter-spacing: 1px; }
-
-    .section { margin-bottom: 16px; }
-
-    select, button {
-      font-size: 13px;
-      border: 1px solid #333;
-      border-radius: 6px;
-      background: #252540;
-      color: #e0e0e0;
-      padding: 8px 12px;
-      cursor: pointer;
-      transition: background 0.15s;
-    }
-    select { width: 100%; margin-bottom: 8px; }
-    select:focus { outline: 1px solid #00c8b4; }
-    button:hover { background: #333355; }
-    button:active { background: #00c8b4; color: #1a1a2e; }
-
-    .device-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
-    .device-row select { flex: 1; margin-bottom: 0; }
-
-    .btn-start {
-      width: 100%;
-      padding: 12px;
-      font-size: 15px;
-      font-weight: 600;
-      background: #00c8b4;
-      color: #1a1a2e;
-      border: none;
-      margin-bottom: 16px;
-    }
-    .btn-start:hover { background: #00e6cf; }
-    .btn-start.active { background: #e04040; }
-    .btn-start.active:hover { background: #ff5050; }
-
-    .effects-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 8px;
-    }
-    .effect-btn {
-      padding: 16px 8px;
-      text-align: center;
-      font-size: 13px;
-      border-radius: 8px;
-    }
-    .effect-btn.on {
-      background: #00c8b4;
-      color: #1a1a2e;
-      border-color: #00c8b4;
-    }
-
-    .active-effects {
-      margin-top: 8px;
-      font-size: 12px;
-      color: #666;
-    }
-    .active-effects span {
-      display: inline-block;
-      background: #252540;
-      border: 1px solid #333;
-      border-radius: 4px;
-      padding: 2px 8px;
-      margin: 2px;
-    }
-
-    .status-bar {
-      position: fixed;
-      bottom: 0;
-      left: 0;
-      right: 0;
-      padding: 6px 16px;
-      background: #111122;
-      font-size: 11px;
-      color: #666;
-      display: flex;
-      justify-content: space-between;
-    }
-    .status-bar .on { color: #00c8b4; }
-  </style>
+  <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <h1>Voice Changer</h1>
@@ -106,138 +16,25 @@
     <select id="output-device"></select>
   </div>
 
-  <button class="btn-start" id="start-btn" onclick="toggleEngine()">Start</button>
+  <button class="btn-start" id="start-btn">Start</button>
 
   <div class="section">
     <h2>DSP Effects</h2>
     <div class="effects-grid">
-      <button class="effect-btn" data-effect="pitch_up" onclick="toggleEffect(this)">Pitch Up<br><small>+5 semi</small></button>
-      <button class="effect-btn" data-effect="pitch_down" onclick="toggleEffect(this)">Pitch Down<br><small>-5 semi</small></button>
-      <button class="effect-btn" data-effect="robot" onclick="toggleEffect(this)">Robot</button>
-      <button class="effect-btn" data-effect="echo" onclick="toggleEffect(this)">Echo</button>
-      <button class="effect-btn" data-effect="reverb" onclick="toggleEffect(this)">Reverb</button>
-      <button class="effect-btn" onclick="clearEffects()">Clear All</button>
+      <button class="effect-btn" data-effect="pitch_up">Pitch Up<br><small>+5 semi</small></button>
+      <button class="effect-btn" data-effect="pitch_down">Pitch Down<br><small>-5 semi</small></button>
+      <button class="effect-btn" data-effect="robot">Robot</button>
+      <button class="effect-btn" data-effect="echo">Echo</button>
+      <button class="effect-btn" data-effect="reverb">Reverb</button>
+      <button class="effect-btn" id="clear-btn">Clear All</button>
     </div>
     <div class="active-effects" id="active-effects"></div>
   </div>
 
   <div class="status-bar">
     <span id="status">Stopped</span>
-    <span id="latency"></span>
   </div>
 
-  <script>
-    const { invoke } = window.__TAURI__.core;
-
-    let engineRunning = false;
-
-    async function init() {
-      try {
-        const inputs = await invoke('get_input_devices');
-        const outputs = await invoke('get_output_devices');
-        const virtualOut = await invoke('get_virtual_output');
-
-        const inputSelect = document.getElementById('input-device');
-        const outputSelect = document.getElementById('output-device');
-
-        inputs.forEach(name => {
-          const opt = document.createElement('option');
-          opt.value = name;
-          opt.textContent = name;
-          inputSelect.appendChild(opt);
-        });
-
-        outputs.forEach(name => {
-          const opt = document.createElement('option');
-          opt.value = name;
-          opt.textContent = name;
-          if (virtualOut && name === virtualOut) opt.selected = true;
-          outputSelect.appendChild(opt);
-        });
-      } catch (e) {
-        console.error('Init failed:', e);
-      }
-    }
-
-    async function toggleEngine() {
-      const btn = document.getElementById('start-btn');
-      const status = document.getElementById('status');
-
-      if (engineRunning) {
-        await invoke('stop_engine');
-        engineRunning = false;
-        btn.textContent = 'Start';
-        btn.classList.remove('active');
-        status.textContent = 'Stopped';
-        status.classList.remove('on');
-      } else {
-        const input = document.getElementById('input-device').value;
-        const output = document.getElementById('output-device').value;
-        try {
-          await invoke('start_engine', { inputDevice: input, outputDevice: output });
-          engineRunning = true;
-          btn.textContent = 'Stop';
-          btn.classList.add('active');
-          status.textContent = 'Running';
-          status.classList.add('on');
-        } catch (e) {
-          alert('Failed to start: ' + e);
-        }
-      }
-    }
-
-    async function toggleEffect(el) {
-      if (!engineRunning) return;
-      const effect = el.dataset.effect;
-      if (!effect) return;
-
-      if (el.classList.contains('on')) {
-        // For simplicity, clear and re-add active effects
-        // (proper toggle by index would need more state tracking)
-        el.classList.remove('on');
-        await rebuildEffects();
-      } else {
-        el.classList.add('on');
-        await invoke('add_effect', { effectType: effect });
-      }
-      await updateActiveEffects();
-    }
-
-    async function rebuildEffects() {
-      await invoke('clear_effects');
-      const buttons = document.querySelectorAll('.effect-btn.on');
-      for (const btn of buttons) {
-        const effect = btn.dataset.effect;
-        if (effect) {
-          await invoke('add_effect', { effectType: effect });
-        }
-      }
-    }
-
-    async function clearEffects() {
-      if (!engineRunning) return;
-      await invoke('clear_effects');
-      document.querySelectorAll('.effect-btn.on').forEach(b => b.classList.remove('on'));
-      await updateActiveEffects();
-    }
-
-    async function updateActiveEffects() {
-      try {
-        const effects = await invoke('get_effects');
-        const container = document.getElementById('active-effects');
-        if (effects.length === 0) {
-          container.innerHTML = '';
-        } else {
-          container.innerHTML = effects.map(([name, on]) =>
-            `<span>${name}</span>`
-          ).join('');
-        }
-      } catch (e) {
-        // Engine might not be running
-      }
-    }
-
-    init();
-  </script>
+  <script src="app.js"></script>
 </body>
 </html>
