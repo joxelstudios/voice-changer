@@ -1,0 +1,10 @@
+[package]
+name = "virtual-mic"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+cpal.workspace = true
+anyhow.workspace = true
+log.workspace = true
+audio-engine = { path = "../audio-engine" }

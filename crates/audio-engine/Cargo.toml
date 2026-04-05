@@ -1,0 +1,11 @@
+[package]
+name = "audio-engine"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+cpal.workspace = true
+ringbuf.workspace = true
+anyhow.workspace = true
+log.workspace = true
+env_logger.workspace = true

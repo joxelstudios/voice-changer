@@ -1,0 +1,5 @@
+/target
+/models/*.onnx
+*.wav
+!presets/*.wav
+.DS_Store
