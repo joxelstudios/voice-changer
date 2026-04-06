@@ -72,23 +72,31 @@ impl ContentExtractor {
             shape[1], shape[2], frames, dim, is_features_last
         );
 
-        // Repeat each frame 2x to match RVC generator's expected hop rate.
-        // Final output: [frames*2, 768]
+        // Upsample 2x via linear interpolation (not repeat).
+        // RVC reference uses F.interpolate(scale_factor=2) which is linear interp.
+        // This produces smoother feature transitions than naive repeat.
         let doubled_frames = frames * 2;
         let mut features = Vec::with_capacity(doubled_frames * dim);
 
-        for f in 0..frames {
-            for _repeat in 0..2 {
-                for d in 0..dim {
-                    let val = if is_features_last {
-                        // data layout [1, frames, 768]: index = f * dim + d
-                        data[f * dim + d]
-                    } else {
-                        // data layout [1, 768, frames]: index = d * frames + f
-                        data[d * frames + f]
-                    };
-                    features.push(val);
-                }
+        let get_val = |f: usize, d: usize| -> f32 {
+            if is_features_last {
+                data[f * dim + d]
+            } else {
+                data[d * frames + f]
+            }
+        };
+
+        for i in 0..doubled_frames {
+            // Map doubled index back to original frame position
+            let src_pos = i as f32 / 2.0;
+            let f0 = src_pos.floor() as usize;
+            let f1 = (f0 + 1).min(frames - 1);
+            let t = src_pos - f0 as f32;
+
+            for d in 0..dim {
+                let v0 = get_val(f0, d);
+                let v1 = get_val(f1, d);
+                features.push(v0 * (1.0 - t) + v1 * t);
             }
         }
 
@@ -112,21 +120,29 @@ pub fn detect_shape(shape: &[i64]) -> Option<(usize, usize, bool)> {
     }
 }
 
-/// Repeat features 2x along the frame axis. Exported for testing.
-pub fn repeat_features(data: &[f32], frames: usize, dim: usize, is_features_last: bool) -> Vec<f32> {
+/// Interpolate features 2x along the frame axis. Exported for testing.
+pub fn interpolate_features(data: &[f32], frames: usize, dim: usize, is_features_last: bool) -> Vec<f32> {
     let doubled_frames = frames * 2;
     let mut features = Vec::with_capacity(doubled_frames * dim);
 
-    for f in 0..frames {
-        for _repeat in 0..2 {
-            for d in 0..dim {
-                let val = if is_features_last {
-                    data[f * dim + d]
-                } else {
-                    data[d * frames + f]
-                };
-                features.push(val);
-            }
+    let get_val = |f: usize, d: usize| -> f32 {
+        if is_features_last {
+            data[f * dim + d]
+        } else {
+            data[d * frames + f]
+        }
+    };
+
+    for i in 0..doubled_frames {
+        let src_pos = i as f32 / 2.0;
+        let f0 = src_pos.floor() as usize;
+        let f1 = (f0 + 1).min(frames - 1);
+        let t = src_pos - f0 as f32;
+
+        for d in 0..dim {
+            let v0 = get_val(f0, d);
+            let v1 = get_val(f1, d);
+            features.push(v0 * (1.0 - t) + v1 * t);
         }
     }
     features
@@ -161,36 +177,36 @@ mod tests {
     }
 
     #[test]
-    fn test_repeat_features_doubles_frames() {
+    fn test_interpolate_features_doubles_frames() {
         // 3 frames, dim=2, features_last layout
         let data = vec![1.0, 2.0,  3.0, 4.0,  5.0, 6.0]; // [3, 2]
-        let result = repeat_features(&data, 3, 2, true);
+        let result = interpolate_features(&data, 3, 2, true);
 
         assert_eq!(result.len(), 6 * 2); // 3*2 frames, 2 dim
-        // Frame 0 repeated: [1,2], [1,2]
-        assert_eq!(&result[0..2], &[1.0, 2.0]);
-        assert_eq!(&result[2..4], &[1.0, 2.0]);
-        // Frame 1 repeated: [3,4], [3,4]
-        assert_eq!(&result[4..6], &[3.0, 4.0]);
-        assert_eq!(&result[6..8], &[3.0, 4.0]);
-        // Frame 2 repeated: [5,6], [5,6]
-        assert_eq!(&result[8..10], &[5.0, 6.0]);
-        assert_eq!(&result[10..12], &[5.0, 6.0]);
+        // Frame 0 (i=0, src=0.0): exact [1,2]
+        assert_eq!(result[0], 1.0);
+        assert_eq!(result[1], 2.0);
+        // Frame 1 (i=1, src=0.5): lerp between frame0 and frame1
+        assert!((result[2] - 2.0).abs() < 0.01); // lerp(1.0, 3.0, 0.5) = 2.0
+        assert!((result[3] - 3.0).abs() < 0.01); // lerp(2.0, 4.0, 0.5) = 3.0
+        // Frame 2 (i=2, src=1.0): exact [3,4]
+        assert_eq!(result[4], 3.0);
+        assert_eq!(result[5], 4.0);
     }
 
     #[test]
-    fn test_repeat_features_first_layout() {
-        // 3 frames, dim=2, features_first layout: data is [1,2] = [dim, frames]
+    fn test_interpolate_features_first_layout() {
+        // 3 frames, dim=2, features_first layout
         // dim0: [1, 2, 3], dim1: [4, 5, 6]
         let data = vec![1.0, 2.0, 3.0,  4.0, 5.0, 6.0];
-        let result = repeat_features(&data, 3, 2, false);
+        let result = interpolate_features(&data, 3, 2, false);
 
         assert_eq!(result.len(), 12);
-        // Frame 0: dim0=1, dim1=4 → [1,4], [1,4]
-        assert_eq!(&result[0..2], &[1.0, 4.0]);
-        assert_eq!(&result[2..4], &[1.0, 4.0]);
-        // Frame 1: dim0=2, dim1=5 → [2,5], [2,5]
-        assert_eq!(&result[4..6], &[2.0, 5.0]);
-        assert_eq!(&result[6..8], &[2.0, 5.0]);
+        // Frame 0 (i=0): exact → dim0=1, dim1=4
+        assert_eq!(result[0], 1.0);
+        assert_eq!(result[1], 4.0);
+        // Frame 1 (i=1, src=0.5): lerp
+        assert!((result[2] - 1.5).abs() < 0.01); // lerp(1, 2, 0.5)
+        assert!((result[3] - 4.5).abs() < 0.01); // lerp(4, 5, 0.5)
     }
 }
