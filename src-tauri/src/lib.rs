@@ -250,6 +250,16 @@ fn set_ai_pitch(semitones: f32, state: tauri::State<'_, AppState>) -> Result<(),
 }
 
 #[tauri::command]
+fn get_ai_error(state: tauri::State<'_, AppState>) -> Result<Option<String>, String> {
+    let guard = lock_engine(&state)?;
+    if let Some(engine) = guard.as_ref() {
+        Ok(engine.take_ai_error())
+    } else {
+        Ok(None)
+    }
+}
+
+#[tauri::command]
 fn is_voice_loaded(state: tauri::State<'_, AppState>) -> Result<bool, String> {
     let guard = lock_engine(&state)?;
     if let Some(engine) = guard.as_ref() {
@@ -463,6 +473,7 @@ pub fn run() {
             unload_voice,
             set_ai_pitch,
             is_voice_loaded,
+            get_ai_error,
             save_preset,
             check_setup,
             download_model,

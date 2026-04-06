@@ -232,6 +232,16 @@ async function selectPreset(name, element) {
     element.classList.add('active');
     aiStatus.textContent = `Loaded: ${name}`;
     aiStatus.classList.add('loaded');
+    // Poll for AI errors after a few seconds to catch inference failures
+    setTimeout(async () => {
+      try {
+        const err = await invoke('get_ai_error');
+        if (err) {
+          aiStatus.textContent = `AI Error: ${err}`;
+          aiStatus.classList.remove('loaded');
+        }
+      } catch (_) {}
+    }, 3000);
   } catch (e) {
     aiStatus.textContent = `Failed: ${e}`;
     console.error('Failed to load voice:', e);

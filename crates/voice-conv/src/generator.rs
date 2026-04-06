@@ -1,8 +1,6 @@
 use anyhow::Result;
 use ort::session::Session;
 use ort::value::Value;
-use rand::Rng;
-use rand_distr::{Distribution, StandardNormal};
 
 /// RVC V2 Generator model.
 /// Takes ContentVec features + F0 pitch data → outputs converted audio.
@@ -22,23 +20,28 @@ impl RvcGenerator {
             .commit_from_file(model_path)
             .map_err(|e| anyhow::anyhow!("Failed to load RVC generator {model_path}: {e}"))?;
 
-        let use_f0 = session
-            .inputs()
-            .iter()
-            .any(|input| input.name() == "pitch");
-
-        // Log actual input names for debugging
+        // Log actual input names — critical for debugging
+        let mut input_names: Vec<String> = Vec::new();
         for input in session.inputs() {
             log::info!("Generator input: name='{}'", input.name());
+            input_names.push(input.name().to_string());
         }
+        for output in session.outputs() {
+            log::info!("Generator output: name='{}'", output.name());
+        }
+
+        let use_f0 = input_names.iter().any(|n| n == "pitch");
+
         log::info!(
-            "RVC generator loaded from {model_path} (f0: {})",
-            if use_f0 { "yes" } else { "no" }
+            "RVC generator loaded from {model_path} (f0: {}, inputs: {:?})",
+            if use_f0 { "yes" } else { "no" },
+            input_names,
         );
         Ok(Self { session, use_f0 })
     }
 
     /// Run voice conversion inference.
+    /// Only sends inputs that actually exist in the ONNX model.
     pub fn generate(
         &mut self,
         features: &ndarray::Array2<f32>,
@@ -50,13 +53,9 @@ impl RvcGenerator {
 
         let phone_data: Vec<f32> = features.iter().copied().collect();
 
-        // FIX: Use standard normal N(0,1) distribution — RVC expects torch.randn() equivalent.
-        // Was uniform [-1,1] which has wrong statistical properties for the neural vocoder.
-        let mut rng = rand::thread_rng();
-        let rnd_data: Vec<f32> = (0..192 * frames)
-            .map(|_| StandardNormal.sample(&mut rng))
-            .collect();
-
+        // Build inputs matching only what the ONNX model actually expects.
+        // The Space Marine model (exported via infer() wrapper) does NOT have
+        // an 'rnd' input — the model generates noise internally.
         let mut inputs: Vec<(&str, ort::session::SessionInputValue<'_>)> = vec![
             ("phone", Value::from_array(([1_usize, frames, dim], phone_data))
                 .map_err(|e| anyhow::anyhow!("phone tensor: {e}"))?.into()),
@@ -64,8 +63,6 @@ impl RvcGenerator {
                 .map_err(|e| anyhow::anyhow!("phone_lengths tensor: {e}"))?.into()),
             ("ds", Value::from_array(([1_usize], vec![0_i64]))
                 .map_err(|e| anyhow::anyhow!("ds tensor: {e}"))?.into()),
-            ("rnd", Value::from_array(([1_usize, 192, frames], rnd_data))
-                .map_err(|e| anyhow::anyhow!("rnd tensor: {e}"))?.into()),
         ];
 
         if self.use_f0 {
@@ -83,7 +80,7 @@ impl RvcGenerator {
             .map_err(|e| anyhow::anyhow!("Failed to extract generated audio: {e}"))?;
 
         let audio: Vec<f32> = data.to_vec();
-        log::debug!("RVC generator: produced {} samples", audio.len());
+        log::debug!("RVC generator: produced {} samples from {} frames", audio.len(), frames);
         Ok(audio)
     }
 

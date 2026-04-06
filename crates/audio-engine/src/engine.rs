@@ -37,6 +37,7 @@ pub struct EngineState {
     effect_chain: Arc<Mutex<EffectChain>>,
     voice_converter: Arc<Mutex<Option<VoiceConverter>>>,
     actual_sample_rate: Arc<AtomicU32>,
+    last_ai_error: Arc<Mutex<Option<String>>>,
     _input_stream: cpal::Stream,
     _output_stream: cpal::Stream,
     _ai_thread: Option<std::thread::JoinHandle<()>>,
@@ -87,6 +88,7 @@ impl AudioEngine {
         let effect_chain = Arc::new(Mutex::new(EffectChain::new()));
         let voice_converter: Arc<Mutex<Option<VoiceConverter>>> = Arc::new(Mutex::new(None));
         let actual_sample_rate = Arc::new(AtomicU32::new(sample_rate));
+        let last_ai_error: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
 
         // --- Input stream ---
         let in_channels = input_config.channels as usize;
@@ -124,6 +126,7 @@ impl AudioEngine {
         let ai_stop_clone = ai_thread_stop.clone();
         let ai_active_thread = ai_active.clone();
         let vc_clone = voice_converter.clone();
+        let err_clone = last_ai_error.clone();
         let chunk_size = (sample_rate as usize) / 10; // 100ms chunks
 
         let ai_thread = std::thread::Builder::new()
@@ -173,7 +176,11 @@ impl AudioEngine {
                                 }
                             }
                             Err(e) => {
-                                log::error!("Voice conversion error: {e}");
+                                let msg = format!("Voice conversion error: {e}");
+                                log::error!("{msg}");
+                                if let Ok(mut err) = err_clone.lock() {
+                                    *err = Some(msg);
+                                }
                                 // Pass through on failure so user hears something
                                 producer_ai_out.push_slice(&input_buf[..read]);
                             }
@@ -254,6 +261,7 @@ impl AudioEngine {
             effect_chain,
             voice_converter,
             actual_sample_rate,
+            last_ai_error,
             _input_stream: input_stream,
             _output_stream: output_stream,
             _ai_thread: Some(ai_thread),
@@ -290,6 +298,11 @@ impl EngineState {
 
     pub fn voice_converter(&self) -> &Arc<Mutex<Option<VoiceConverter>>> {
         &self.voice_converter
+    }
+
+    /// Get and clear the last AI processing error (if any).
+    pub fn take_ai_error(&self) -> Option<String> {
+        self.last_ai_error.lock().ok().and_then(|mut e| e.take())
     }
 
     /// The actual sample rate negotiated with the audio device.
