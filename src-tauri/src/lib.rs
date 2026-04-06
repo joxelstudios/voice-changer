@@ -19,7 +19,6 @@ use config::AppConfig;
 
 pub struct AppState {
     engine: Mutex<Option<EngineState>>,
-    voice_converter: Mutex<Option<VoiceConverter>>,
     preset_manager: Mutex<PresetManager>,
     config: Mutex<AppConfig>,
     sample_rate: u32,
@@ -205,9 +204,12 @@ fn load_voice(preset_name: String, state: tauri::State<'_, AppState>) -> Result<
     };
 
     let converter = VoiceConverter::new(config).map_err(|e| e.to_string())?;
-    *state.voice_converter.lock().map_err(|e| e.to_string())? = Some(converter);
 
-    // Save last preset to config
+    // Set on the engine — this activates the AI processing thread
+    let guard = lock_engine(&state)?;
+    let engine = guard.as_ref().ok_or("Engine not running. Start the engine first.")?;
+    engine.set_voice_converter(Some(converter));
+
     if let Ok(mut cfg) = state.config.lock() {
         cfg.last_preset = Some(preset_name);
         let _ = cfg.save(&state.data_dir.join("config.json"));
@@ -217,23 +219,35 @@ fn load_voice(preset_name: String, state: tauri::State<'_, AppState>) -> Result<
 
 #[tauri::command]
 fn unload_voice(state: tauri::State<'_, AppState>) -> Result<(), String> {
-    *state.voice_converter.lock().map_err(|e| e.to_string())? = None;
+    let guard = lock_engine(&state)?;
+    if let Some(engine) = guard.as_ref() {
+        engine.set_voice_converter(None);
+    }
     Ok(())
 }
 
 #[tauri::command]
 fn set_ai_pitch(semitones: f32, state: tauri::State<'_, AppState>) -> Result<(), String> {
-    let mut guard = state.voice_converter.lock().map_err(|e| e.to_string())?;
-    if let Some(converter) = guard.as_mut() {
-        converter.set_pitch_shift(semitones);
+    let guard = lock_engine(&state)?;
+    if let Some(engine) = guard.as_ref() {
+        let vc = engine.voice_converter();
+        if let Ok(mut vc_guard) = vc.lock() {
+            if let Some(converter) = vc_guard.as_mut() {
+                converter.set_pitch_shift(semitones);
+            }
+        }
     }
     Ok(())
 }
 
 #[tauri::command]
 fn is_voice_loaded(state: tauri::State<'_, AppState>) -> Result<bool, String> {
-    let guard = state.voice_converter.lock().map_err(|e| e.to_string())?;
-    Ok(guard.is_some())
+    let guard = lock_engine(&state)?;
+    if let Some(engine) = guard.as_ref() {
+        Ok(engine.is_ai_active())
+    } else {
+        Ok(false)
+    }
 }
 
 #[tauri::command]
@@ -335,7 +349,7 @@ pub fn run() {
     tauri::Builder::default()
         .manage(AppState {
             engine: Mutex::new(None),
-            voice_converter: Mutex::new(None),
+
             preset_manager: Mutex::new(preset_manager),
             config: Mutex::new(app_config),
             sample_rate: 48000,

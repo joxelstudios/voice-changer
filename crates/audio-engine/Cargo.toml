@@ -10,3 +10,4 @@ anyhow.workspace = true
 log.workspace = true
 env_logger.workspace = true
 dsp = { path = "../dsp" }
+voice-conv = { path = "../voice-conv" }
