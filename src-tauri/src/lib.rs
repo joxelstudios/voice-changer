@@ -304,7 +304,7 @@ fn create_default_preset(state: tauri::State<'_, AppState>) -> Result<(), String
 
     if demo_model.exists() {
         let preset = VoicePreset {
-            name: "Demo Voice".to_string(),
+            name: "Space Marine".to_string(),
             model_path: demo_model.to_string_lossy().to_string(),
             pitch_shift: 0.0,
         };

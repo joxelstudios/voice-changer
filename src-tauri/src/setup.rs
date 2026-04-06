@@ -5,9 +5,9 @@ use serde::Serialize;
 /// ContentVec vec-768-layer-12: the feature extractor that ozada/onnx_rvc models expect
 pub const CONTENTVEC_URL: &str =
     "https://huggingface.co/ozada/onnx_rvc/resolve/main/vec-768-layer-12.onnx";
-/// Drake voice from ozada/onnx_rvc (MIT license, confirmed RVC V2 generator with correct inputs)
+/// Space Marine voice (Dawn of War) - converted from GeorgeDr/Space_MarineRVC
 pub const DEMO_VOICE_URL: &str =
-    "https://huggingface.co/ozada/onnx_rvc/resolve/main/drake.onnx";
+    "https://github.com/joxelstudios/voice-changer/releases/download/v0.1.0/space_marine.onnx";
 
 #[derive(Debug, Serialize)]
 pub struct SetupStatus {
