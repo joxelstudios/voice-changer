@@ -51,26 +51,46 @@ impl AudioEngine {
         let output_dev = find_device_by_name(&config.output_device, false)
             .context("Output device lookup failed")?;
 
-        let stream_config = StreamConfig {
-            channels: 1,
-            sample_rate: cpal::SampleRate(config.sample_rate),
-            buffer_size: cpal::BufferSize::Fixed(config.buffer_size),
-        };
+        // Use each device's default config for maximum compatibility.
+        // VB-Cable and other virtual devices often reject non-default configs.
+        let input_config: StreamConfig = input_dev
+            .default_input_config()
+            .context("Failed to get default input config")?
+            .into();
+        let output_config: StreamConfig = output_dev
+            .default_output_config()
+            .context("Failed to get default output config")?
+            .into();
 
-        let capacity = (config.sample_rate as usize) / 5;
+        log::info!(
+            "Input config: {}ch {}Hz, Output config: {}ch {}Hz",
+            input_config.channels, input_config.sample_rate.0,
+            output_config.channels, output_config.sample_rate.0,
+        );
+
+        let capacity = (input_config.sample_rate.0 as usize) / 5;
         let rb = AudioRingBuffer::new(capacity);
         let (mut producer, mut consumer) = rb.split();
 
         let bypass = Arc::new(AtomicBool::new(false));
         let effect_chain = Arc::new(Mutex::new(EffectChain::new()));
 
+        let in_channels = input_config.channels as usize;
         let input_stream = input_dev
             .build_input_stream(
-                &stream_config,
+                &input_config,
                 move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                    let written = producer.push_slice(data);
-                    if written < data.len() {
-                        log::warn!("Ring buffer overflow: dropped {} samples", data.len() - written);
+                    if in_channels == 1 {
+                        let written = producer.push_slice(data);
+                        if written < data.len() {
+                            log::warn!("Ring buffer overflow: dropped {} samples", data.len() - written);
+                        }
+                    } else {
+                        // Downmix multi-channel to mono
+                        for chunk in data.chunks(in_channels) {
+                            let mono = chunk.iter().sum::<f32>() / in_channels as f32;
+                            let _ = producer.push_slice(&[mono]);
+                        }
                     }
                 },
                 |err| log::error!("Input stream error: {err}"),
@@ -80,9 +100,10 @@ impl AudioEngine {
 
         let bypass_clone = bypass.clone();
         let chain_clone = effect_chain.clone();
+        let out_channels = output_config.channels as usize;
         let output_stream = output_dev
             .build_output_stream(
-                &stream_config,
+                &output_config,
                 move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
                     if bypass_clone.load(Ordering::Relaxed) {
                         for sample in data.iter_mut() {
@@ -91,15 +112,29 @@ impl AudioEngine {
                         return;
                     }
 
-                    // Pull from ring buffer
-                    let read = consumer.pop_slice(data);
-                    for sample in &mut data[read..] {
+                    let mono_frames = data.len() / out_channels;
+                    let mut mono_buf = vec![0.0_f32; mono_frames];
+
+                    // Pull mono from ring buffer
+                    let read = consumer.pop_slice(&mut mono_buf);
+                    for sample in &mut mono_buf[read..] {
                         *sample = 0.0;
                     }
 
                     // Apply effect chain (try_lock to never block the audio thread)
                     if let Ok(mut chain) = chain_clone.try_lock() {
-                        chain.process(&mut data[..read]);
+                        chain.process(&mut mono_buf[..read]);
+                    }
+
+                    // Write mono to all output channels
+                    if out_channels == 1 {
+                        data[..mono_frames].copy_from_slice(&mono_buf);
+                    } else {
+                        for (i, &sample) in mono_buf.iter().enumerate() {
+                            for ch in 0..out_channels {
+                                data[i * out_channels + ch] = sample;
+                            }
+                        }
                     }
                 },
                 |err| log::error!("Output stream error: {err}"),
@@ -111,8 +146,9 @@ impl AudioEngine {
         output_stream.play().context("Failed to start output stream")?;
 
         log::info!(
-            "Audio engine started: {} -> {} @ {}Hz, buffer {}",
-            config.input_device, config.output_device, config.sample_rate, config.buffer_size,
+            "Audio engine started: {} ({}ch {}Hz) -> {} ({}ch {}Hz)",
+            config.input_device, input_config.channels, input_config.sample_rate.0,
+            config.output_device, output_config.channels, output_config.sample_rate.0,
         );
 
         Ok(EngineState {
