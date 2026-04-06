@@ -2,11 +2,12 @@ use std::path::Path;
 use serde::Serialize;
 
 /// Model download URLs
+/// ContentVec vec-768-layer-12: the feature extractor that ozada/onnx_rvc models expect
 pub const CONTENTVEC_URL: &str =
-    "https://huggingface.co/NaruseMioShirakana/MoeSS-SUBModel/resolve/main/vec-768-layer-9.onnx";
-// Placeholder — replace with an actual public RVC ONNX model URL
+    "https://huggingface.co/ozada/onnx_rvc/resolve/main/vec-768-layer-12.onnx";
+/// Drake voice from ozada/onnx_rvc (MIT license, confirmed RVC V2 generator with correct inputs)
 pub const DEMO_VOICE_URL: &str =
-    "https://huggingface.co/NaruseMioShirakana/MoeSS-SUBModel/resolve/main/vec-256-layer-9.onnx";
+    "https://huggingface.co/ozada/onnx_rvc/resolve/main/drake.onnx";
 
 #[derive(Debug, Serialize)]
 pub struct SetupStatus {
@@ -18,10 +19,15 @@ pub struct SetupStatus {
     pub demo_voice_url: String,
 }
 
+fn file_ok(path: &Path, min_size: u64) -> bool {
+    path.exists() && std::fs::metadata(path).map(|m| m.len() >= min_size).unwrap_or(false)
+}
+
 pub fn check_setup(data_dir: &Path) -> SetupStatus {
     let models_dir = data_dir.join("models");
-    let has_contentvec = models_dir.join("contentvec.onnx").exists();
-    let has_demo_voice = models_dir.join("demo-voice.onnx").exists();
+    // Check models exist AND are reasonably sized (not wrong/truncated downloads)
+    let has_contentvec = file_ok(&models_dir.join("contentvec.onnx"), 100_000_000); // >100MB
+    let has_demo_voice = file_ok(&models_dir.join("demo-voice.onnx"), 50_000_000);  // >50MB
     let has_vb_cable = virtual_mic::find_virtual_output().is_some();
 
     SetupStatus {
