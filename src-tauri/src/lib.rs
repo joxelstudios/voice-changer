@@ -184,7 +184,9 @@ fn get_effects(state: tauri::State<'_, AppState>) -> Result<Vec<(String, bool)>,
 
 #[tauri::command]
 fn list_presets(state: tauri::State<'_, AppState>) -> Result<Vec<VoicePreset>, String> {
-    let manager = state.preset_manager.lock().map_err(|e| e.to_string())?;
+    let mut manager = state.preset_manager.lock().map_err(|e| e.to_string())?;
+    // Rescan in case presets were added (e.g., after setup wizard)
+    let _ = manager.scan();
     Ok(manager.list().to_vec())
 }
 
