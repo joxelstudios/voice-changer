@@ -82,15 +82,24 @@ fn autocorrelation_f0(frame: &[f32], sample_rate: f32, min_period: usize, max_pe
 
 /// Convert F0 in Hz to mel-scale pitch bins (1-255) for RVC input.
 /// Unvoiced frames (f0 == 0) map to 0.
+/// Uses the same normalization as the RVC Python reference:
+///   f0_mel_min = 1127 * ln(1 + 50/700)    ≈ 80.0
+///   f0_mel_max = 1127 * ln(1 + 1100/700)  ≈ 1000.5
+///   bin = (mel - f0_mel_min) * 254 / (f0_mel_max - f0_mel_min) + 1
 pub fn f0_to_mel_bins(f0: &[f32]) -> Vec<i64> {
+    let f0_mel_min: f32 = 1127.0 * (1.0_f32 + 50.0 / 700.0).ln();
+    let f0_mel_max: f32 = 1127.0 * (1.0_f32 + 1100.0 / 700.0).ln();
+    let mel_range = f0_mel_max - f0_mel_min;
+
     f0.iter()
         .map(|&freq| {
             if freq <= 0.0 {
                 0_i64
             } else {
                 let mel = 1127.0 * (1.0 + freq / 700.0).ln();
-                // Scale to 1-255 range
-                let bin = (mel / 12.0).round().clamp(1.0, 255.0) as i64;
+                let bin = ((mel - f0_mel_min) * 254.0 / mel_range + 1.0)
+                    .round()
+                    .clamp(1.0, 255.0) as i64;
                 bin
             }
         })

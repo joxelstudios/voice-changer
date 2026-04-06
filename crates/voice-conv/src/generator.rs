@@ -2,6 +2,7 @@ use anyhow::Result;
 use ort::session::Session;
 use ort::value::Value;
 use rand::Rng;
+use rand_distr::{Distribution, StandardNormal};
 
 /// RVC V2 Generator model.
 /// Takes ContentVec features + F0 pitch data → outputs converted audio.
@@ -26,6 +27,10 @@ impl RvcGenerator {
             .iter()
             .any(|input| input.name() == "pitch");
 
+        // Log actual input names for debugging
+        for input in session.inputs() {
+            log::info!("Generator input: name='{}'", input.name());
+        }
         log::info!(
             "RVC generator loaded from {model_path} (f0: {})",
             if use_f0 { "yes" } else { "no" }
@@ -45,10 +50,12 @@ impl RvcGenerator {
 
         let phone_data: Vec<f32> = features.iter().copied().collect();
 
-        // Use actual random noise (not zeros) — RVC expects torch.randn() equivalent.
-        // This makes the output sound more natural with proper stochastic variation.
+        // FIX: Use standard normal N(0,1) distribution — RVC expects torch.randn() equivalent.
+        // Was uniform [-1,1] which has wrong statistical properties for the neural vocoder.
         let mut rng = rand::thread_rng();
-        let rnd_data: Vec<f32> = (0..192 * frames).map(|_| rng.gen::<f32>() * 2.0 - 1.0).collect();
+        let rnd_data: Vec<f32> = (0..192 * frames)
+            .map(|_| StandardNormal.sample(&mut rng))
+            .collect();
 
         let mut inputs: Vec<(&str, ort::session::SessionInputValue<'_>)> = vec![
             ("phone", Value::from_array(([1_usize, frames, dim], phone_data))
