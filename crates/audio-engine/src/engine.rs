@@ -73,14 +73,14 @@ impl AudioEngine {
             output_config.channels, output_config.sample_rate.0,
         );
 
-        let capacity = (sample_rate as usize) / 2; // 500ms
+        let capacity = (sample_rate as usize) * 4; // 4 seconds — enough for AI chunks + buffering
         let rb_a = AudioRingBuffer::new(capacity);
         let (mut producer_a, mut consumer_a_dsp) = rb_a.split();
 
         let rb_ai_in = HeapRb::<f32>::new(capacity);
         let (mut producer_ai_in, mut consumer_ai_in) = rb_ai_in.split();
 
-        let rb_ai_out = HeapRb::<f32>::new(capacity * 4); // large buffer for AI latency
+        let rb_ai_out = HeapRb::<f32>::new(capacity); // large buffer for AI latency
         let (mut producer_ai_out, mut consumer_ai_out) = rb_ai_out.split();
 
         let bypass = Arc::new(AtomicBool::new(false));
@@ -127,7 +127,10 @@ impl AudioEngine {
         let ai_active_thread = ai_active.clone();
         let vc_clone = voice_converter.clone();
         let err_clone = last_ai_error.clone();
-        let chunk_size = (sample_rate as usize) / 10; // 100ms chunks
+        // 1.5 second chunks — at 16kHz this gives ~150 ContentVec frames,
+        // doubled to ~300, well within FIXED_FRAMES=360.
+        // Larger chunks = fewer gaps, smoother output. Tradeoff: more latency.
+        let chunk_size = (sample_rate as usize) * 3 / 2; // 1500ms
 
         let ai_thread = std::thread::Builder::new()
             .name("voice-ai".to_string())
