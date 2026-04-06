@@ -152,4 +152,61 @@ mod tests {
         assert!(bins[2] > bins[1]); // 440Hz should have higher mel bin than 200Hz
         assert_eq!(bins[3], 0); // unvoiced
     }
+
+    #[test]
+    fn test_f0_mel_bins_match_python_reference() {
+        // Python reference formula:
+        //   f0_mel_min = 1127 * log(1 + 50/700)    ≈ 80.0
+        //   f0_mel_max = 1127 * log(1 + 1100/700)  ≈ 1000.5
+        //   bin = (mel - f0_mel_min) * 254 / (f0_mel_max - f0_mel_min) + 1
+        let f0_mel_min: f32 = 1127.0 * (1.0_f32 + 50.0 / 700.0).ln();
+        let f0_mel_max: f32 = 1127.0 * (1.0_f32 + 1100.0 / 700.0).ln();
+
+        let test_cases: Vec<(f32, i64)> = vec![
+            (0.0, 0),     // unvoiced
+            (200.0, {
+                let mel: f32 = 1127.0 * (1.0_f32 + 200.0 / 700.0).ln();
+                ((mel - f0_mel_min) * 254.0 / (f0_mel_max - f0_mel_min) + 1.0).round() as i64
+            }),
+            (440.0, {
+                let mel: f32 = 1127.0 * (1.0_f32 + 440.0 / 700.0).ln();
+                ((mel - f0_mel_min) * 254.0 / (f0_mel_max - f0_mel_min) + 1.0).round() as i64
+            }),
+            (100.0, {
+                let mel: f32 = 1127.0 * (1.0_f32 + 100.0 / 700.0).ln();
+                ((mel - f0_mel_min) * 254.0 / (f0_mel_max - f0_mel_min) + 1.0).round() as i64
+            }),
+        ];
+
+        let f0_vals: Vec<f32> = test_cases.iter().map(|(f, _)| *f).collect();
+        let bins = f0_to_mel_bins(&f0_vals);
+
+        for (i, (freq, expected)) in test_cases.iter().enumerate() {
+            assert_eq!(
+                bins[i], *expected,
+                "F0={freq}Hz: expected bin {expected}, got {}",
+                bins[i]
+            );
+        }
+    }
+
+    #[test]
+    fn test_f0_extraction_voiced_frames_on_longer_signal() {
+        // 600ms signal (simulating context + input) should produce voiced frames
+        let sr = 16000;
+        let freq = 200.0;
+        let duration = 0.6;
+        let n_samples = (sr as f32 * duration) as usize;
+        let audio: Vec<f32> = (0..n_samples)
+            .map(|i| (std::f32::consts::TAU * freq * i as f32 / sr as f32).sin())
+            .collect();
+
+        let f0 = extract_f0(&audio, sr, 160);
+        let voiced_count = f0.iter().filter(|&&f| f > 0.0).count();
+        assert!(
+            voiced_count > f0.len() / 2,
+            "Expected majority voiced frames, got {voiced_count}/{} total",
+            f0.len()
+        );
+    }
 }

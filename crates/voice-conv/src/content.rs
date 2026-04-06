@@ -97,3 +97,100 @@ impl ContentExtractor {
         Ok(result)
     }
 }
+
+/// Detect output shape layout. Exported for testing.
+pub fn detect_shape(shape: &[i64]) -> Option<(usize, usize, bool)> {
+    if shape.len() != 3 {
+        return None;
+    }
+    let d1 = shape[1] as usize;
+    let d2 = shape[2] as usize;
+    if d2 == 768 || (d2 > d1 && d1 < 768) {
+        Some((d1, d2, true)) // [1, frames, 768]
+    } else {
+        Some((d2, d1, false)) // [1, 768, frames]
+    }
+}
+
+/// Repeat features 2x along the frame axis. Exported for testing.
+pub fn repeat_features(data: &[f32], frames: usize, dim: usize, is_features_last: bool) -> Vec<f32> {
+    let doubled_frames = frames * 2;
+    let mut features = Vec::with_capacity(doubled_frames * dim);
+
+    for f in 0..frames {
+        for _repeat in 0..2 {
+            for d in 0..dim {
+                let val = if is_features_last {
+                    data[f * dim + d]
+                } else {
+                    data[d * frames + f]
+                };
+                features.push(val);
+            }
+        }
+    }
+    features
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_shape_detection_features_last() {
+        // [1, 10, 768] → frames=10, dim=768, features_last=true
+        let (frames, dim, is_last) = detect_shape(&[1, 10, 768]).unwrap();
+        assert_eq!(frames, 10);
+        assert_eq!(dim, 768);
+        assert!(is_last);
+    }
+
+    #[test]
+    fn test_shape_detection_features_first() {
+        // [1, 768, 10] → frames=10, dim=768, features_last=false
+        let (frames, dim, is_last) = detect_shape(&[1, 768, 10]).unwrap();
+        assert_eq!(frames, 10);
+        assert_eq!(dim, 768);
+        assert!(!is_last);
+    }
+
+    #[test]
+    fn test_shape_detection_invalid_rank() {
+        assert!(detect_shape(&[1, 768]).is_none());
+        assert!(detect_shape(&[1, 2, 3, 4]).is_none());
+    }
+
+    #[test]
+    fn test_repeat_features_doubles_frames() {
+        // 3 frames, dim=2, features_last layout
+        let data = vec![1.0, 2.0,  3.0, 4.0,  5.0, 6.0]; // [3, 2]
+        let result = repeat_features(&data, 3, 2, true);
+
+        assert_eq!(result.len(), 6 * 2); // 3*2 frames, 2 dim
+        // Frame 0 repeated: [1,2], [1,2]
+        assert_eq!(&result[0..2], &[1.0, 2.0]);
+        assert_eq!(&result[2..4], &[1.0, 2.0]);
+        // Frame 1 repeated: [3,4], [3,4]
+        assert_eq!(&result[4..6], &[3.0, 4.0]);
+        assert_eq!(&result[6..8], &[3.0, 4.0]);
+        // Frame 2 repeated: [5,6], [5,6]
+        assert_eq!(&result[8..10], &[5.0, 6.0]);
+        assert_eq!(&result[10..12], &[5.0, 6.0]);
+    }
+
+    #[test]
+    fn test_repeat_features_first_layout() {
+        // 3 frames, dim=2, features_first layout: data is [1,2] = [dim, frames]
+        // dim0: [1, 2, 3], dim1: [4, 5, 6]
+        let data = vec![1.0, 2.0, 3.0,  4.0, 5.0, 6.0];
+        let result = repeat_features(&data, 3, 2, false);
+
+        assert_eq!(result.len(), 12);
+        // Frame 0: dim0=1, dim1=4 → [1,4], [1,4]
+        assert_eq!(&result[0..2], &[1.0, 4.0]);
+        assert_eq!(&result[2..4], &[1.0, 4.0]);
+        // Frame 1: dim0=2, dim1=5 → [2,5], [2,5]
+        assert_eq!(&result[4..6], &[2.0, 5.0]);
+        assert_eq!(&result[6..8], &[2.0, 5.0]);
+    }
+}
