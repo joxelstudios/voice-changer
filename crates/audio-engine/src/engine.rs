@@ -127,10 +127,10 @@ impl AudioEngine {
         let ai_active_thread = ai_active.clone();
         let vc_clone = voice_converter.clone();
         let err_clone = last_ai_error.clone();
-        // 1.5 second chunks — at 16kHz this gives ~150 ContentVec frames,
-        // doubled to ~300, well within FIXED_FRAMES=360.
-        // Larger chunks = fewer gaps, smoother output. Tradeoff: more latency.
-        let chunk_size = (sample_rate as usize) * 3 / 2; // 1500ms
+        // 500ms chunks — at 16kHz gives ~50 ContentVec frames, doubled to ~100.
+        // Padded to FIXED_FRAMES=360. Lower latency than 1.5s, still enough
+        // real data for decent quality.
+        let chunk_size = sample_rate as usize / 2; // 500ms
 
         let ai_thread = std::thread::Builder::new()
             .name("voice-ai".to_string())
