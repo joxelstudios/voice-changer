@@ -19,6 +19,7 @@ virtual-mic = { path = "../crates/virtual-mic" }
 voice-conv = { path = "../crates/voice-conv" }
 ureq = "3"
 open = "5"
+global-hotkey = "0.6"
 
 [lib]
 name = "voice_changer_app"

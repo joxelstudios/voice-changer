@@ -27,3 +27,4 @@ tauri-build = "2"
 ort = { version = "2.0.0-rc.12", features = ["coreml"] }
 ndarray = "0.17"
 rubato = "0.15"
+rand = "0.8"

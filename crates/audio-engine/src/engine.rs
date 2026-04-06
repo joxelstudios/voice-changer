@@ -36,10 +36,8 @@ pub struct EngineState {
     _output_stream: cpal::Stream,
 }
 
-// cpal::Stream contains platform-specific types that aren't Send/Sync on macOS
-// (CoreAudio callback wrappers). The streams are created on one thread and only
-// held alive by EngineState — they're never accessed across threads directly.
-// The bypass and effect_chain fields use proper atomic/mutex synchronization.
+// cpal::Stream contains platform-specific types that aren't Send/Sync on macOS.
+// The streams are only held alive; shared state uses proper synchronization.
 unsafe impl Send for EngineState {}
 unsafe impl Sync for EngineState {}
 
@@ -47,9 +45,6 @@ pub struct AudioEngine;
 
 impl AudioEngine {
     /// Start the audio pipeline with DSP effects.
-    ///
-    /// Captures from `input_device`, pipes through a ring buffer,
-    /// applies the effect chain, and outputs to `output_device`.
     pub fn start(config: EngineConfig) -> Result<EngineState> {
         let input_dev = find_device_by_name(&config.input_device, true)
             .context("Input device lookup failed")?;
@@ -62,7 +57,6 @@ impl AudioEngine {
             buffer_size: cpal::BufferSize::Fixed(config.buffer_size),
         };
 
-        // Ring buffer: ~200ms worth of audio
         let capacity = (config.sample_rate as usize) / 5;
         let rb = AudioRingBuffer::new(capacity);
         let (mut producer, mut consumer) = rb.split();
@@ -76,15 +70,10 @@ impl AudioEngine {
                 move |data: &[f32], _: &cpal::InputCallbackInfo| {
                     let written = producer.push_slice(data);
                     if written < data.len() {
-                        log::warn!(
-                            "Ring buffer overflow: dropped {} samples",
-                            data.len() - written
-                        );
+                        log::warn!("Ring buffer overflow: dropped {} samples", data.len() - written);
                     }
                 },
-                |err| {
-                    log::error!("Input stream error: {err}");
-                },
+                |err| log::error!("Input stream error: {err}"),
                 None,
             )
             .context("Failed to build input stream")?;
@@ -113,9 +102,7 @@ impl AudioEngine {
                         chain.process(&mut data[..read]);
                     }
                 },
-                |err| {
-                    log::error!("Output stream error: {err}");
-                },
+                |err| log::error!("Output stream error: {err}"),
                 None,
             )
             .context("Failed to build output stream")?;
@@ -125,10 +112,7 @@ impl AudioEngine {
 
         log::info!(
             "Audio engine started: {} -> {} @ {}Hz, buffer {}",
-            config.input_device,
-            config.output_device,
-            config.sample_rate,
-            config.buffer_size,
+            config.input_device, config.output_device, config.sample_rate, config.buffer_size,
         );
 
         Ok(EngineState {
@@ -150,8 +134,6 @@ impl EngineState {
         self.bypass.load(Ordering::Relaxed)
     }
 
-    /// Access the effect chain for adding/removing/toggling effects.
-    /// This locks the mutex — do NOT call from the audio thread.
     pub fn effect_chain(&self) -> &Arc<Mutex<EffectChain>> {
         &self.effect_chain
     }

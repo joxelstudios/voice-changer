@@ -15,6 +15,8 @@ impl ContentExtractor {
             .map_err(|e| anyhow::anyhow!("Failed to create session builder: {e}"))?
             .with_optimization_level(ort::session::builder::GraphOptimizationLevel::Level3)
             .map_err(|e| anyhow::anyhow!("Failed to set optimization level: {e}"))?
+            .with_intra_threads(4)
+            .map_err(|e| anyhow::anyhow!("Failed to set intra threads: {e}"))?
             .commit_from_file(model_path)
             .map_err(|e| anyhow::anyhow!("Failed to load ContentVec model {model_path}: {e}"))?;
 

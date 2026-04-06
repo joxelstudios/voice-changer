@@ -1,6 +1,7 @@
 use anyhow::Result;
 use ort::session::Session;
 use ort::value::Value;
+use rand::Rng;
 
 /// RVC V2 Generator model.
 /// Takes ContentVec features + F0 pitch data → outputs converted audio.
@@ -15,6 +16,8 @@ impl RvcGenerator {
             .map_err(|e| anyhow::anyhow!("Failed to create session builder: {e}"))?
             .with_optimization_level(ort::session::builder::GraphOptimizationLevel::Level3)
             .map_err(|e| anyhow::anyhow!("Failed to set optimization level: {e}"))?
+            .with_intra_threads(2)
+            .map_err(|e| anyhow::anyhow!("Failed to set intra threads: {e}"))?
             .commit_from_file(model_path)
             .map_err(|e| anyhow::anyhow!("Failed to load RVC generator {model_path}: {e}"))?;
 
@@ -40,9 +43,12 @@ impl RvcGenerator {
         let frames = features.shape()[0];
         let dim = features.shape()[1];
 
-        // Flatten features for shape-tuple API
         let phone_data: Vec<f32> = features.iter().copied().collect();
-        let rnd_data = vec![0.0_f32; 1 * 192 * frames];
+
+        // Use actual random noise (not zeros) — RVC expects torch.randn() equivalent.
+        // This makes the output sound more natural with proper stochastic variation.
+        let mut rng = rand::thread_rng();
+        let rnd_data: Vec<f32> = (0..192 * frames).map(|_| rng.gen::<f32>() * 2.0 - 1.0).collect();
 
         let mut inputs: Vec<(&str, ort::session::SessionInputValue<'_>)> = vec![
             ("phone", Value::from_array(([1_usize, frames, dim], phone_data))
