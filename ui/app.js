@@ -68,7 +68,7 @@ async function init() {
   // AI controls
   document.getElementById('unload-btn').addEventListener('click', unloadVoice);
   document.getElementById('ai-pitch').addEventListener('input', (e) => {
-    const val = parseInt(e.target.value);
+    const val = parseFloat(e.target.value);
     document.getElementById('ai-pitch-value').textContent = `${val >= 0 ? '+' : ''}${val} st`;
     invoke('set_ai_pitch', { semitones: val }).catch(console.error);
   });

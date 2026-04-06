@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
@@ -36,13 +36,13 @@ pub struct EngineState {
     ai_active: Arc<AtomicBool>,
     effect_chain: Arc<Mutex<EffectChain>>,
     voice_converter: Arc<Mutex<Option<VoiceConverter>>>,
+    actual_sample_rate: Arc<AtomicU32>,
     _input_stream: cpal::Stream,
     _output_stream: cpal::Stream,
     _ai_thread: Option<std::thread::JoinHandle<()>>,
     ai_thread_stop: Arc<AtomicBool>,
 }
 
-// cpal::Stream contains platform-specific types that aren't Send/Sync on macOS.
 unsafe impl Send for EngineState {}
 unsafe impl Sync for EngineState {}
 
@@ -64,33 +64,31 @@ impl AudioEngine {
             .context("Failed to get default output config")?
             .into();
 
+        let sample_rate = input_config.sample_rate.0;
+
         log::info!(
             "Input config: {}ch {}Hz, Output config: {}ch {}Hz",
-            input_config.channels, input_config.sample_rate.0,
+            input_config.channels, sample_rate,
             output_config.channels, output_config.sample_rate.0,
         );
 
-        let sample_rate = input_config.sample_rate.0;
-
-        // Ring buffer A: mic input → mono audio (used by both DSP and AI paths)
         let capacity = (sample_rate as usize) / 2; // 500ms
         let rb_a = AudioRingBuffer::new(capacity);
         let (mut producer_a, mut consumer_a_dsp) = rb_a.split();
 
-        // Ring buffer B: duplicate of input for AI processing thread
         let rb_ai_in = HeapRb::<f32>::new(capacity);
         let (mut producer_ai_in, mut consumer_ai_in) = rb_ai_in.split();
 
-        // Ring buffer C: AI processed output → output callback
-        let rb_ai_out = HeapRb::<f32>::new(capacity * 2); // larger for latency headroom
+        let rb_ai_out = HeapRb::<f32>::new(capacity * 4); // large buffer for AI latency
         let (mut producer_ai_out, mut consumer_ai_out) = rb_ai_out.split();
 
         let bypass = Arc::new(AtomicBool::new(false));
         let ai_active = Arc::new(AtomicBool::new(false));
         let effect_chain = Arc::new(Mutex::new(EffectChain::new()));
         let voice_converter: Arc<Mutex<Option<VoiceConverter>>> = Arc::new(Mutex::new(None));
+        let actual_sample_rate = Arc::new(AtomicU32::new(sample_rate));
 
-        // --- Input stream: push mono to both DSP and AI ring buffers ---
+        // --- Input stream ---
         let in_channels = input_config.channels as usize;
         let ai_active_input = ai_active.clone();
         let input_stream = input_dev
@@ -98,7 +96,6 @@ impl AudioEngine {
                 &input_config,
                 move |data: &[f32], _: &cpal::InputCallbackInfo| {
                     let is_ai = ai_active_input.load(Ordering::Relaxed);
-
                     if in_channels == 1 {
                         if is_ai {
                             producer_ai_in.push_slice(data);
@@ -122,6 +119,7 @@ impl AudioEngine {
             .context("Failed to build input stream")?;
 
         // --- AI processing thread ---
+        // FIX BUG #1: Acquire lock BEFORE consuming input. If lock fails, don't consume.
         let ai_thread_stop = Arc::new(AtomicBool::new(false));
         let ai_stop_clone = ai_thread_stop.clone();
         let ai_active_thread = ai_active.clone();
@@ -143,42 +141,55 @@ impl AudioEngine {
                         continue;
                     }
 
-                    // Accumulate a full chunk
+                    // Check enough data available
                     let available = consumer_ai_in.occupied_len();
                     if available < chunk_size {
                         std::thread::sleep(std::time::Duration::from_millis(5));
                         continue;
                     }
 
+                    // FIX: Acquire lock BEFORE consuming input samples
+                    let mut guard = match vc_clone.lock() {
+                        Ok(g) => g,
+                        Err(_) => {
+                            std::thread::sleep(std::time::Duration::from_millis(1));
+                            continue;
+                        }
+                    };
+
+                    // NOW consume input (lock is held, samples are safe)
                     let read = consumer_ai_in.pop_slice(&mut input_buf);
                     if read == 0 {
+                        drop(guard);
                         continue;
                     }
 
-                    // Process through voice converter
-                    if let Ok(mut guard) = vc_clone.try_lock() {
-                        if let Some(converter) = guard.as_mut() {
-                            match converter.process_chunk(&input_buf[..read]) {
-                                Ok(output) => {
-                                    let written = producer_ai_out.push_slice(&output);
-                                    if written < output.len() {
-                                        log::warn!("AI output buffer overflow");
-                                    }
-                                }
-                                Err(e) => {
-                                    log::error!("Voice conversion failed: {e}");
-                                    // Pass through original audio on failure
-                                    producer_ai_out.push_slice(&input_buf[..read]);
+                    if let Some(converter) = guard.as_mut() {
+                        match converter.process_chunk(&input_buf[..read]) {
+                            Ok(output) => {
+                                let written = producer_ai_out.push_slice(&output);
+                                if written < output.len() {
+                                    log::warn!("AI output buffer overflow: wrote {written}/{}", output.len());
                                 }
                             }
+                            Err(e) => {
+                                log::error!("Voice conversion error: {e}");
+                                // Pass through on failure so user hears something
+                                producer_ai_out.push_slice(&input_buf[..read]);
+                            }
                         }
+                    } else {
+                        // Converter is None but AI active — pass through
+                        producer_ai_out.push_slice(&input_buf[..read]);
                     }
+
+                    drop(guard);
                 }
                 log::info!("AI processing thread stopped");
             })
             .context("Failed to spawn AI thread")?;
 
-        // --- Output stream: read from DSP or AI ring buffer ---
+        // --- Output stream ---
         let bypass_clone = bypass.clone();
         let chain_clone = effect_chain.clone();
         let ai_active_output = ai_active.clone();
@@ -199,13 +210,11 @@ impl AudioEngine {
                     let mut mono_buf = vec![0.0_f32; mono_frames];
 
                     if ai_active_output.load(Ordering::Relaxed) {
-                        // AI mode: read from AI output buffer
                         let read = consumer_ai_out.pop_slice(&mut mono_buf);
                         for sample in &mut mono_buf[read..] {
                             *sample = 0.0;
                         }
                     } else {
-                        // DSP mode: read from input buffer, apply effects
                         let read = consumer_a_dsp.pop_slice(&mut mono_buf);
                         for sample in &mut mono_buf[read..] {
                             *sample = 0.0;
@@ -215,7 +224,6 @@ impl AudioEngine {
                         }
                     }
 
-                    // Write mono to all output channels
                     if out_channels == 1 {
                         data[..mono_frames].copy_from_slice(&mono_buf);
                     } else {
@@ -236,7 +244,7 @@ impl AudioEngine {
 
         log::info!(
             "Audio engine started: {} ({}ch {}Hz) -> {} ({}ch {}Hz)",
-            config.input_device, input_config.channels, input_config.sample_rate.0,
+            config.input_device, input_config.channels, sample_rate,
             config.output_device, output_config.channels, output_config.sample_rate.0,
         );
 
@@ -245,6 +253,7 @@ impl AudioEngine {
             ai_active,
             effect_chain,
             voice_converter,
+            actual_sample_rate,
             _input_stream: input_stream,
             _output_stream: output_stream,
             _ai_thread: Some(ai_thread),
@@ -266,7 +275,6 @@ impl EngineState {
         &self.effect_chain
     }
 
-    /// Set the voice converter. Pass None to disable AI mode.
     pub fn set_voice_converter(&self, converter: Option<VoiceConverter>) {
         if let Ok(mut guard) = self.voice_converter.lock() {
             let is_some = converter.is_some();
@@ -280,15 +288,18 @@ impl EngineState {
         self.ai_active.load(Ordering::Relaxed)
     }
 
-    /// Access the voice converter for parameter changes (e.g., pitch shift).
     pub fn voice_converter(&self) -> &Arc<Mutex<Option<VoiceConverter>>> {
         &self.voice_converter
+    }
+
+    /// The actual sample rate negotiated with the audio device.
+    pub fn actual_sample_rate(&self) -> u32 {
+        self.actual_sample_rate.load(Ordering::Relaxed)
     }
 }
 
 impl Drop for EngineState {
     fn drop(&mut self) {
         self.ai_thread_stop.store(true, Ordering::Relaxed);
-        // Thread will exit on next loop iteration
     }
 }

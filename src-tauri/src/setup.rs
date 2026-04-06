@@ -19,15 +19,24 @@ pub struct SetupStatus {
     pub demo_voice_url: String,
 }
 
+/// Expected model version — bump this to force re-download when URLs change.
+pub const SETUP_VERSION: &str = "2";
+
 fn file_ok(path: &Path, min_size: u64) -> bool {
     path.exists() && std::fs::metadata(path).map(|m| m.len() >= min_size).unwrap_or(false)
 }
 
 pub fn check_setup(data_dir: &Path) -> SetupStatus {
     let models_dir = data_dir.join("models");
-    // Check models exist AND are reasonably sized (not wrong/truncated downloads)
-    let has_contentvec = file_ok(&models_dir.join("contentvec.onnx"), 100_000_000); // >100MB
-    let has_demo_voice = file_ok(&models_dir.join("demo-voice.onnx"), 50_000_000);  // >50MB
+    let version_file = data_dir.join(".setup_version");
+
+    // If setup version doesn't match, force re-download
+    let version_ok = std::fs::read_to_string(&version_file)
+        .map(|v| v.trim() == SETUP_VERSION)
+        .unwrap_or(false);
+
+    let has_contentvec = version_ok && file_ok(&models_dir.join("contentvec.onnx"), 100_000_000);
+    let has_demo_voice = version_ok && file_ok(&models_dir.join("demo-voice.onnx"), 100_000_000);
     let has_vb_cable = virtual_mic::find_virtual_output().is_some();
 
     SetupStatus {

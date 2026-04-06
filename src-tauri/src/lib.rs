@@ -197,19 +197,26 @@ fn load_voice(preset_name: String, state: tauri::State<'_, AppState>) -> Result<
         .ok_or_else(|| format!("Preset not found: {preset_name}"))?
         .clone();
 
+    // FIX BUG #3: Use the actual device sample rate, not hardcoded 48kHz
+    let guard = lock_engine(&state)?;
+    let engine = guard.as_ref().ok_or("Engine not running. Start the engine first.")?;
+    let actual_sr = engine.actual_sample_rate();
+
     let content_model = state.data_dir.join("models").join("contentvec.onnx");
     let config = VoiceConverterConfig {
         content_model_path: content_model.to_string_lossy().to_string(),
         generator_model_path: preset.model_path.clone(),
-        sample_rate: state.sample_rate,
+        sample_rate: actual_sr,
         pitch_shift: preset.pitch_shift,
     };
 
+    // Drop the engine lock before creating the converter (which takes time for warm-up)
+    drop(guard);
+
     let converter = VoiceConverter::new(config).map_err(|e| e.to_string())?;
 
-    // Set on the engine — this activates the AI processing thread
     let guard = lock_engine(&state)?;
-    let engine = guard.as_ref().ok_or("Engine not running. Start the engine first.")?;
+    let engine = guard.as_ref().ok_or("Engine not running")?;
     engine.set_voice_converter(Some(converter));
 
     if let Ok(mut cfg) = state.config.lock() {
@@ -296,6 +303,14 @@ fn download_model(app: tauri::AppHandle, name: String, url: String, state: tauri
             }
         }
     });
+    Ok(())
+}
+
+#[tauri::command]
+fn mark_setup_complete(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let version_file = state.data_dir.join(".setup_version");
+    std::fs::write(&version_file, setup::SETUP_VERSION).map_err(|e| e.to_string())?;
+    log::info!("Setup version {} written", setup::SETUP_VERSION);
     Ok(())
 }
 
@@ -452,6 +467,7 @@ pub fn run() {
             check_setup,
             download_model,
             create_default_preset,
+            mark_setup_complete,
             get_saved_config,
             open_url,
         ])

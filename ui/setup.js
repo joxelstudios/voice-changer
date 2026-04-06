@@ -85,11 +85,12 @@ async function runSetup() {
 
 async function checkAllDone() {
   if (downloadsDone.contentvec && downloadsDone.demo) {
-    // Create default preset
+    // Create default preset and mark setup complete
     try {
       await invoke('create_default_preset');
+      await invoke('mark_setup_complete');
     } catch (e) {
-      console.error('Failed to create default preset:', e);
+      console.error('Failed to finalize setup:', e);
     }
 
     const btn = document.getElementById('launch-btn');
