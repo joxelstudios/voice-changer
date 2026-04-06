@@ -20,7 +20,6 @@ impl ContentExtractor {
             .commit_from_file(model_path)
             .map_err(|e| anyhow::anyhow!("Failed to load ContentVec model {model_path}: {e}"))?;
 
-        // Log actual input/output names for debugging
         for input in session.inputs() {
             log::info!("ContentVec input: name='{}'", input.name());
         }
@@ -37,7 +36,7 @@ impl ContentExtractor {
     pub fn extract(&mut self, audio_16k: &[f32]) -> Result<Array2<f32>> {
         let n = audio_16k.len();
 
-        // FIX: ContentVec expects 3D input [1, 1, N] (batch, channels, samples)
+        // ContentVec expects 3D input [1, 1, N] (batch, channels, samples)
         let input_value = Value::from_array(([1_usize, 1_usize, n], audio_16k.to_vec()))
             .map_err(|e| anyhow::anyhow!("Failed to create input tensor: {e}"))?;
 
@@ -45,32 +44,56 @@ impl ContentExtractor {
         let outputs = self.session.run(vec![("source", input_sv)])
             .map_err(|e| anyhow::anyhow!("ContentVec inference failed: {e}"))?;
 
-        // Output shape: [1, 768, frames]
         let (shape, data) = outputs[0]
             .try_extract_tensor::<f32>()
             .map_err(|e| anyhow::anyhow!("Failed to extract ContentVec output: {e}"))?;
 
-        let dim = shape[1] as usize;  // 768
-        let frames = shape[2] as usize;
+        // Output could be [1, frames, 768] or [1, 768, frames] depending on model.
+        // Detect by checking which dimension is 768.
+        let (frames, dim, is_features_last) = if shape.len() == 3 {
+            let d1 = shape[1] as usize;
+            let d2 = shape[2] as usize;
+            if d2 == 768 || (d2 > d1 && d1 < 768) {
+                // [1, frames, 768] — standard HuBERT output
+                (d1, d2, true)
+            } else {
+                // [1, 768, frames] — some models use features-first
+                (d2, d1, false)
+            }
+        } else {
+            return Err(anyhow::anyhow!(
+                "Unexpected ContentVec output rank: {} (shape: {:?})",
+                shape.len(), &shape[..]
+            ));
+        };
 
-        // FIX: Repeat frames 2x and transpose to [frames*2, 768]
-        // Python reference: np.repeat(hubert, 2, axis=2).transpose(0, 2, 1)
-        // Output is [1, 768, frames] → repeat on axis 2 → [1, 768, frames*2] → transpose → [1, frames*2, 768]
+        log::debug!(
+            "ContentVec raw output: shape=[1, {}, {}], detected frames={} dim={} features_last={}",
+            shape[1], shape[2], frames, dim, is_features_last
+        );
+
+        // Repeat each frame 2x to match RVC generator's expected hop rate.
+        // Final output: [frames*2, 768]
         let doubled_frames = frames * 2;
         let mut features = Vec::with_capacity(doubled_frames * dim);
 
         for f in 0..frames {
-            // Each original frame is repeated twice
             for _repeat in 0..2 {
                 for d in 0..dim {
-                    // data is [1, 768, frames] in row-major: index = d * frames + f
-                    features.push(data[d * frames + f]);
+                    let val = if is_features_last {
+                        // data layout [1, frames, 768]: index = f * dim + d
+                        data[f * dim + d]
+                    } else {
+                        // data layout [1, 768, frames]: index = d * frames + f
+                        data[d * frames + f]
+                    };
+                    features.push(val);
                 }
             }
         }
 
         let result = Array2::from_shape_vec((doubled_frames, dim), features)?;
-        log::debug!("ContentVec: {frames} frames → {doubled_frames} (doubled) x {dim} dims");
+        log::debug!("ContentVec: {frames} raw frames → {doubled_frames} doubled x {dim} dims");
         Ok(result)
     }
 }
